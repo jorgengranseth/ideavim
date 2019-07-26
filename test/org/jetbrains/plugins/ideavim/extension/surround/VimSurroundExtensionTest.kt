@@ -120,6 +120,12 @@ class VimSurroundExtensionTest : VimTestCase() {
     myFixture.checkResult("foo = baz( bar )")
   }
 
+  fun testSurroundFunctionNameInsideParentheses() {
+    configureByText("foo = ${c}bar")
+    typeText(parseKeys("ysiw<C-F>baz"))
+    myFixture.checkResult("foo = (baz bar)")
+  }
+
   /* visual surround */
 
   fun testVisualSurroundWordParens() {

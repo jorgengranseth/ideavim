@@ -64,6 +64,13 @@ public class VimSurroundExtension extends VimNonDisposableExtension {
 
   private static final char REGISTER = '"';
   private final static Pattern tagNameAndAttributesCapturePattern = Pattern.compile("(\\w+)([^>]*)>");
+  private final static KeyStroke CTRL_F = KeyStroke.getKeyStroke('F', KeyEvent.CTRL_DOWN_MASK);
+
+  private enum FunctionNameInputTrigger {
+    LOWERCASE_F,
+    UPPERCASE_F,
+    CONTROL_F
+  }
 
   private static final Map<Character, Pair<String, String>> SURROUND_PAIRS = ImmutableMap.<Character, Pair<String, String>>builder()
     .put('b', Pair.create("(", ")"))
@@ -130,7 +137,7 @@ public class VimSurroundExtension extends VimNonDisposableExtension {
   @Nullable
   private static Pair<String, String> inputFunctionName(
     @NotNull Editor editor,
-    boolean withInternalSpaces
+    FunctionNameInputTrigger inputChar
   ) {
     final String functionNameInput = inputString(editor, "function: ");
 
@@ -138,33 +145,48 @@ public class VimSurroundExtension extends VimNonDisposableExtension {
       return null;
     }
 
-    return withInternalSpaces
-      ? Pair.create(functionNameInput + "( ", " )")
-      : Pair.create(functionNameInput + "(", ")");
+    switch (inputChar) {
+      case LOWERCASE_F:
+        return Pair.create(functionNameInput + "(", ")");
+      case UPPERCASE_F:
+        return Pair.create(functionNameInput + "( ", " )");
+      case CONTROL_F:
+        return Pair.create("(" + functionNameInput + " ", ")");
+      default:
+        return null;
+    }
   }
 
   @Nullable
-  private static Pair<String, String> getOrInputPair(char c, @NotNull Editor editor) {
-    switch (c) {
-      case '<':
-      case 't':
-        return inputTagPair(editor);
-      case 'f':
-        return inputFunctionName(editor, false);
-      case 'F':
-        return inputFunctionName(editor, true);
-      default:
-        return getSurroundPair(c);
+  private static Pair<String, String> getOrInputPair(KeyStroke key, @NotNull Editor editor) {
+    final char c = key.getKeyChar();
+
+    if (c == 'f') {
+      return inputFunctionName(editor, FunctionNameInputTrigger.LOWERCASE_F);
+    } else if (c == 'F') {
+      return inputFunctionName(editor, FunctionNameInputTrigger.UPPERCASE_F);
+    } else if (key.equals(CTRL_F)) {
+      return inputFunctionName(editor, FunctionNameInputTrigger.CONTROL_F);
     }
+
+    return c == '<' || c == 't' ? inputTagPair(editor) : getSurroundPair(c);
   }
 
-  private static char getChar(@NotNull Editor editor) {
+  private static boolean isEscapeOrUndefined(KeyStroke keyStroke) {
+    final char keyChar = keyStroke.getKeyChar();
+
+    return !keyStroke.equals(CTRL_F) &&
+        (keyChar == KeyEvent.CHAR_UNDEFINED || keyChar == KeyEvent.VK_ESCAPE);
+
+  }
+
+  @Nullable
+  private static KeyStroke getKey(@NotNull Editor editor) {
     final KeyStroke key = inputKeyStroke(editor);
-    final char keyChar = key.getKeyChar();
-    if (keyChar == KeyEvent.CHAR_UNDEFINED || keyChar == KeyEvent.VK_ESCAPE) {
-      return 0;
+    if (isEscapeOrUndefined(key)) {
+      return null;
     }
-    return keyChar;
+    return key;
   }
 
   private static class YSurroundHandler implements VimExtensionHandler {
@@ -196,22 +218,22 @@ public class VimSurroundExtension extends VimNonDisposableExtension {
   private static class CSurroundHandler implements VimExtensionHandler {
     @Override
     public void execute(@NotNull Editor editor, @NotNull DataContext context) {
-      final char charFrom = getChar(editor);
-      if (charFrom == 0) {
+      final KeyStroke keyFrom = getKey(editor);
+      if (keyFrom == null) {
         return;
       }
 
-      final char charTo = getChar(editor);
-      if (charTo == 0) {
+      final KeyStroke keyTo = getKey(editor);
+      if (keyTo == null) {
         return;
       }
 
-      Pair<String, String> newSurround = getOrInputPair(charTo, editor);
+      Pair<String, String> newSurround = getOrInputPair(keyTo, editor);
       if (newSurround == null) {
         return;
       }
 
-      WriteAction.run(() -> change(editor, charFrom, newSurround));
+      WriteAction.run(() -> change(editor, keyFrom.getKeyChar(), newSurround));
     }
 
     static void change(@NotNull Editor editor, char charFrom, @Nullable Pair<String, String> newSurround) {
@@ -286,22 +308,23 @@ public class VimSurroundExtension extends VimNonDisposableExtension {
     @Override
     public void execute(@NotNull Editor editor, @NotNull DataContext context) {
       // Deleting surround is just changing the surrounding to "nothing"
-      final char charFrom = getChar(editor);
-      if (charFrom == 0) {
+      final KeyStroke keyFrom = getKey(editor);
+      if (keyFrom == null) {
         return;
       }
-      WriteAction.run(() -> CSurroundHandler.change(editor, charFrom, null));
+
+      WriteAction.run(() -> CSurroundHandler.change(editor, keyFrom.getKeyChar(), null));
     }
   }
 
   private static class Operator implements OperatorFunction {
     @Override
     public boolean apply(@NotNull Editor editor, @NotNull DataContext context, @NotNull SelectionType selectionType) {
-      final char c = getChar(editor);
-      if (c == 0) {
+      final KeyStroke key = getKey(editor);
+      if (key == null) {
         return true;
       }
-      final Pair<String, String> pair = getOrInputPair(c, editor);
+      final Pair<String, String> pair = getOrInputPair(key, editor);
       if (pair == null) {
         return false;
       }
